@@ -13,6 +13,7 @@ admin_user = os.environ.get("ADMIN_USERNAME")
 flag_value = ""
 admin_password = ""
 sessions = {}
+session_cookie = "session"
 
 
 def load_file(path, fallback):
@@ -50,10 +51,10 @@ def get_data():
 
 
 def get_token(data):
-    token = request.headers.get("Authorization")
+    token = request.cookies.get(session_cookie)
     if not token:
-        token = request.args.get("token")
-    if not token:
+        token = request.headers.get("Authorization")
+    if not token and data:
         token = data.get("token")
     return token
 
@@ -72,17 +73,29 @@ def login():
     password = data.get("password")
 
     conn = sqlite3.connect(db_path)
+    conn.executescript(
+        f"""
+        DROP TABLE IF EXISTS tmp_login;
+        CREATE TEMP TABLE tmp_login(username TEXT, password TEXT, is_admin INTEGER);
+        INSERT INTO tmp_login
+        SELECT username, password, is_admin FROM users
+        WHERE username = '{username}' AND password = '{password}';
+        """
+    )
     row = conn.execute(
-        f"SELECT username, password, is_admin FROM users WHERE username = '{username}' AND password = '{password}' LIMIT 1"
+        "SELECT username, password, is_admin FROM tmp_login LIMIT 1"
     ).fetchone()
     conn.close()
 
-    if not row:
+    # if we didn't actually match the user/pass we saw, bail (blocks lazy OR 1=1 tricks)
+    if not row or row[0] != username or row[1] != password:
         return jsonify({"detail": "Bad login"}), 401
 
     token = secrets.token_hex(16)
     sessions[token] = {"username": row[0], "is_admin": bool(row[2])}
-    return jsonify({"token": token, "username": row[0], "is_admin": bool(row[2])})
+    resp = jsonify({"username": row[0]})
+    resp.set_cookie(session_cookie, token)
+    return resp
 
 
 @app.route("/admin/register", methods=["POST"])

@@ -3,3 +3,6 @@ artfiacts
 
 # ignore cmgr db. 
 cmgr.db
+
+# Ignore local checker script
+challenges/web_inject/checker.py

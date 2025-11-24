@@ -1,6 +1,6 @@
 # Identity Checker
   - Namespace: 18739
-  - ID: identity-checker
+  - ID: web_inject
   - Type: custom
   - Category: Web Exploitation
   - Points: 200
@@ -25,7 +25,7 @@ For reference:
 
 - Try crafting a username/password pair that closes the original `WHERE` clause
   and appends your own SQL.
-- Once you control an admin token, hit `/admin/flag`.
+- Once you control an admin session, hit `/admin/flag`.
 
 ## Tags
  - beginner
@@ -44,10 +44,11 @@ init: true
 ## Solution Overview
 
 Use the login form to inject `'); INSERT INTO users(username,password,is_admin)`
-payloads and create an account you know. Log in normally, capture the returned
-token, then call `/admin/flag` with that token to retrieve the instance flag.
+payloads and create an account you know. Log in normally, keep the returned
+session cookie, then call `/admin/flag` with that cookie to retrieve the
+instance flag.
 
 
 ## Attributes
-- author: Gaurav Savant
+- author: gsavant
 - event: 18739
