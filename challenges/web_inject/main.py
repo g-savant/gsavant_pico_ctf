@@ -7,6 +7,7 @@ import sqlite3
 from Crypto.Cipher import AES
 from flask import Flask, jsonify, request, send_from_directory
 
+# paths and config pulled from env
 base_dir = os.path.abspath(os.path.dirname(__file__))
 static_dir = os.path.join(base_dir, "static")
 db_path = os.environ.get("USER_DB_PATH")
@@ -17,6 +18,7 @@ db_key = os.environ.get("DB_KEY", "dev_db_key")
 static_nonce = os.environ.get("GCM_NONCE", "stat1cn0nc3")
 nonce_file = os.environ.get("NONCE_PATH", "/challenge/gcm_nonce")
 
+# session and crypto setup
 sessions = {}
 session_cookie = "session"
 aes_key = hashlib.sha256(db_key.encode()).digest()
@@ -26,6 +28,7 @@ if len(nonce_bytes) < 12:
     nonce_bytes = nonce_bytes.ljust(12, b"0")
 fixed_nonce = nonce_bytes
 
+# load flag/admin secrets from disk if they exist
 flag_value = "picoCTF_dev_flag"
 admin_password = "123"
 if flag_path and os.path.exists(flag_path):
@@ -42,6 +45,7 @@ if nonce_file and os.path.exists(nonce_file):
             fixed_nonce = static_nonce.encode()[:12].ljust(12, b"0")
 
 
+# quick crypto helpers for passwords
 def encrypt_password(password):
     cipher = AES.new(aes_key, AES.MODE_GCM, nonce=fixed_nonce)
     ciphertext, tag = cipher.encrypt_and_digest(password.encode())
@@ -60,6 +64,7 @@ def decrypt_password(ciphertext_b64):
         return ""
 
 
+# start over each run to keep things simple
 def init_db():
     conn = sqlite3.connect(db_path)
     with conn:
@@ -78,15 +83,18 @@ def init_db():
 
 app = Flask(__name__)
 
+# make sure the db exists when the app loads
 init_db()
 
 
 @app.route("/login", methods=["POST"])
 def login():
+    # grab data from either json or form
     data = request.get_json(silent=True) or request.form.to_dict()
     username = data.get("username", "")
     password = data.get("password", "")
 
+    # still building SQL with string formatting on purpose
     conn = sqlite3.connect(db_path)
     conn.executescript(
         f"""
@@ -109,6 +117,7 @@ def login():
     if decrypted != password:
         return jsonify({"detail": "Bad login"}), 401
 
+    # hand back some details and set a session
     token = secrets.token_hex(16)
     sessions[token] = {"username": row[0], "is_admin": bool(row[4])}
     resp = jsonify(
@@ -120,6 +129,7 @@ def login():
 
 @app.route("/register", methods=["POST"])
 def public_register():
+    # anybody can make an account
     data = request.get_json(silent=True) or request.form.to_dict()
     username = data.get("username", "")
     password = data.get("password", "")
@@ -150,7 +160,8 @@ def public_register():
 
 @app.route("/admin/register", methods=["POST"])
 def register():
-    data = request.get_json(silent=True) or request.form.to_dict()
+    # only admin can mint new users
+    data = request.get_json() or request.form.to_dict()
     token = request.cookies.get(session_cookie) or request.headers.get("Authorization") or data.get("token")
     sess = sessions.get(token)
     if not sess or not sess.get("is_admin"):
@@ -182,6 +193,7 @@ def register():
 
 @app.route("/admin/flag", methods=["POST"])
 def admin_flag():
+    # flag is for admins
     data = request.get_json(silent=True) or request.form.to_dict()
     token = request.cookies.get(session_cookie) or request.headers.get("Authorization") or data.get("token")
     sess = sessions.get(token)
