@@ -90,7 +90,11 @@ init_db()
 @app.route("/login", methods=["POST"])
 def login():
     # grab data from either json or form
-    data = request.get_json(silent=True) or request.form.to_dict()
+    data = request.get_json(silent=True)
+    if not data:
+        data = request.form.to_dict()
+    if not data:
+        data = {}
     username = data.get("username", "")
     password = data.get("password", "")
 
@@ -130,7 +134,11 @@ def login():
 @app.route("/register", methods=["POST"])
 def public_register():
     # anybody can make an account
-    data = request.get_json(silent=True) or request.form.to_dict()
+    data = request.get_json(silent=True)
+    if not data:
+        data = request.form.to_dict()
+    if not data:
+        data = {}
     username = data.get("username", "")
     password = data.get("password", "")
     if not username or not password:
@@ -161,8 +169,17 @@ def public_register():
 @app.route("/admin/register", methods=["POST"])
 def register():
     # only admin can mint new users
-    data = request.get_json() or request.form.to_dict()
-    token = request.cookies.get(session_cookie) or request.headers.get("Authorization") or data.get("token")
+    data = request.get_json(silent=True)
+    if not data:
+        data = request.form.to_dict()
+    if not data:
+        data = {}
+
+    token = request.cookies.get(session_cookie)
+    if not token:
+        token = request.headers.get("Authorization")
+    if not token:
+        token = data.get("token", "")
     sess = sessions.get(token)
     if not sess or not sess.get("is_admin"):
         return jsonify({"detail": "Admin only"}), 403
@@ -194,8 +211,17 @@ def register():
 @app.route("/admin/flag", methods=["POST"])
 def admin_flag():
     # flag is for admins
-    data = request.get_json(silent=True) or request.form.to_dict()
-    token = request.cookies.get(session_cookie) or request.headers.get("Authorization") or data.get("token")
+    data = request.get_json(silent=True)
+    if not data:
+        data = request.form.to_dict()
+    if not data:
+        data = {}
+
+    token = request.cookies.get(session_cookie)
+    if not token:
+        token = request.headers.get("Authorization")
+    if not token:
+        token = data.get("token", "")
     sess = sessions.get(token)
     if not sess or not sess.get("is_admin"):
         return jsonify({"detail": "Admin only"}), 403
