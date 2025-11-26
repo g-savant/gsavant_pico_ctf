@@ -1,7 +1,11 @@
-from flask import Flask, request, jsonify, send_from_directory
+import base64
+import hashlib
 import os
 import secrets
 import sqlite3
+
+from Crypto.Cipher import AES
+from flask import Flask, jsonify, request, send_from_directory
 
 base_dir = os.path.abspath(os.path.dirname(__file__))
 static_dir = os.path.join(base_dir, "static")
@@ -9,122 +13,179 @@ db_path = os.environ.get("USER_DB_PATH")
 flag_path = os.environ.get("FLAG_PATH")
 admin_pass_path = os.environ.get("ADMIN_PASS_PATH")
 admin_user = os.environ.get("ADMIN_USERNAME")
+db_key = os.environ.get("DB_KEY", "dev_db_key")
+static_nonce = os.environ.get("GCM_NONCE", "stat1cn0nc3")
+nonce_file = os.environ.get("NONCE_PATH", "/challenge/gcm_nonce")
 
-flag_value = ""
-admin_password = ""
 sessions = {}
 session_cookie = "session"
+aes_key = hashlib.sha256(db_key.encode()).digest()
+nonce_bytes = static_nonce.encode()
+nonce_bytes = nonce_bytes[:12]
+if len(nonce_bytes) < 12:
+    nonce_bytes = nonce_bytes.ljust(12, b"0")
+fixed_nonce = nonce_bytes
+
+flag_value = "picoCTF_dev_flag"
+admin_password = "123"
+if flag_path and os.path.exists(flag_path):
+    with open(flag_path) as fh:
+        flag_value = fh.read().strip()
+if admin_pass_path and os.path.exists(admin_pass_path):
+    with open(admin_pass_path) as fh:
+        admin_password = fh.read().strip()
+if nonce_file and os.path.exists(nonce_file):
+    with open(nonce_file) as fh:
+        val = fh.read().strip()
+        if val:
+            static_nonce = val
+            fixed_nonce = static_nonce.encode()[:12].ljust(12, b"0")
 
 
-def load_file(path, fallback):
-    if os.path.exists(path):
-        with open(path, "r") as fh:
-            return fh.read().strip()
-    return fallback
+def encrypt_password(password):
+    cipher = AES.new(aes_key, AES.MODE_GCM, nonce=fixed_nonce)
+    ciphertext, tag = cipher.encrypt_and_digest(password.encode())
+    return (
+        base64.b64encode(ciphertext).decode(),
+        base64.b64encode(tag).decode(),
+    )
+
+
+def decrypt_password(ciphertext_b64):
+    try:
+        ciphertext = base64.b64decode(ciphertext_b64 or "")
+        cipher = AES.new(aes_key, AES.MODE_GCM, nonce=fixed_nonce)
+        return cipher.decrypt(ciphertext).decode(errors="ignore")
+    except Exception:
+        return ""
 
 
 def init_db():
     conn = sqlite3.connect(db_path)
     with conn:
+        conn.execute("DROP TABLE IF EXISTS users")
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS users(id INTEGER, username TEXT, password TEXT, is_admin INTEGER)"
+            "CREATE TABLE users(username TEXT PRIMARY KEY, nonce TEXT, password TEXT, tag TEXT, is_admin INTEGER)"
         )
+        nonce_b64 = base64.b64encode(fixed_nonce).decode()
+        cipher, tag = encrypt_password(admin_password)
         conn.execute(
-            "INSERT OR REPLACE INTO users(username, password, is_admin) VALUES (?, ?, 1)",
-            (admin_user, admin_password),
+            "INSERT INTO users(username, nonce, password, tag, is_admin) VALUES (?, ?, ?, ?, 1)",
+            (admin_user, nonce_b64, cipher, tag),
         )
     conn.close()
 
 
 app = Flask(__name__)
 
-flag_value = load_file(flag_path, "picoCTF_dev_flag")
-admin_password = load_file(admin_pass_path, "123")
 init_db()
-
-
-def get_data():
-    data = request.get_json(silent=True)
-    if isinstance(data, dict):
-        return data
-    return request.form.to_dict()
-
-
-def get_token(data):
-    token = request.cookies.get(session_cookie)
-    if not token:
-        token = request.headers.get("Authorization")
-    if not token and data:
-        token = data.get("token")
-    return token
-
-
-def need_session(token):
-    info = sessions.get(token)
-    if not info:
-        return None
-    return info
 
 
 @app.route("/login", methods=["POST"])
 def login():
-    data = get_data()
-    username = data.get("username")
-    password = data.get("password")
+    data = request.get_json(silent=True) or request.form.to_dict()
+    username = data.get("username", "")
+    password = data.get("password", "")
 
     conn = sqlite3.connect(db_path)
     conn.executescript(
         f"""
         DROP TABLE IF EXISTS tmp_login;
-        CREATE TEMP TABLE tmp_login(username TEXT, password TEXT, is_admin INTEGER);
+        CREATE TEMP TABLE tmp_login(username TEXT, nonce TEXT, password TEXT, tag TEXT, is_admin INTEGER);
         INSERT INTO tmp_login
-        SELECT username, password, is_admin FROM users
-        WHERE username = '{username}' AND password = '{password}';
+        SELECT username, nonce, password, tag, is_admin FROM users
+        WHERE username = '{username}';
         """
     )
     row = conn.execute(
-        "SELECT username, password, is_admin FROM tmp_login LIMIT 1"
+        "SELECT username, nonce, password, tag, is_admin FROM tmp_login LIMIT 1"
     ).fetchone()
     conn.close()
 
-    # if we didn't actually match the user/pass we saw, bail (blocks lazy OR 1=1 tricks)
-    if not row or row[0] != username or row[1] != password:
+    if not row:
+        return jsonify({"detail": "Bad login"}), 401
+
+    decrypted = decrypt_password(row[2])
+    if decrypted != password:
         return jsonify({"detail": "Bad login"}), 401
 
     token = secrets.token_hex(16)
-    sessions[token] = {"username": row[0], "is_admin": bool(row[2])}
-    resp = jsonify({"username": row[0]})
+    sessions[token] = {"username": row[0], "is_admin": bool(row[4])}
+    resp = jsonify(
+        {"username": row[0], "nonce_b64": row[1], "cipher": row[2], "tag": row[3]}
+    )
     resp.set_cookie(session_cookie, token)
     return resp
 
 
-@app.route("/admin/register", methods=["POST"])
-def register():
-    data = get_data()
-    session = need_session(get_token(data))
-    if not session or not session.get("is_admin"):
-        return jsonify({"detail": "Admin only"}), 403
+@app.route("/register", methods=["POST"])
+def public_register():
+    data = request.get_json(silent=True) or request.form.to_dict()
+    username = data.get("username", "")
+    password = data.get("password", "")
+    if not username or not password:
+        return jsonify({"detail": "Need username and password"}), 400
 
-    username = data.get("username")
-    password = data.get("password")
-    is_admin = str(data.get("is_admin")).lower() in ("true", "1")
-
+    nonce_b64 = base64.b64encode(fixed_nonce).decode()
+    cipher, tag = encrypt_password(password)
     conn = sqlite3.connect(db_path)
     with conn:
         conn.execute(
-            "INSERT INTO users(username, password, is_admin) VALUES (?, ?, ?)",
-            (username, password, int(is_admin)),
+            "INSERT OR IGNORE INTO users(username, nonce, password, tag, is_admin) VALUES (?, ?, ?, ?, 0)",
+            (username, nonce_b64, cipher, tag),
         )
+        created = conn.total_changes > 0
+    conn.close()
+    status = 201 if created else 200
+    return (
+        jsonify(
+            {
+                "status": "created" if created else "exists",
+                "username": username,
+            }
+        ),
+        status,
+    )
+
+
+@app.route("/admin/register", methods=["POST"])
+def register():
+    data = request.get_json(silent=True) or request.form.to_dict()
+    token = request.cookies.get(session_cookie) or request.headers.get("Authorization") or data.get("token")
+    sess = sessions.get(token)
+    if not sess or not sess.get("is_admin"):
+        return jsonify({"detail": "Admin only"}), 403
+
+    username = data.get("username", "")
+    password = data.get("password", "")
+    is_admin = str(data.get("is_admin")).lower() in ("true", "1")
+
+    nonce_b64 = base64.b64encode(fixed_nonce).decode()
+    cipher, tag = encrypt_password(password)
+    conn = sqlite3.connect(db_path)
+    with conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO users(username, nonce, password, tag, is_admin) VALUES (?, ?, ?, ?, ?)",
+            (username, nonce_b64, cipher, tag, int(is_admin)),
+        )
+        created = conn.total_changes > 0
     conn.close()
 
-    return jsonify({"status": "created", "username": username, "is_admin": is_admin})
+    return jsonify(
+        {
+            "status": "created" if created else "exists",
+            "username": username,
+            "is_admin": is_admin,
+        }
+    )
 
 
 @app.route("/admin/flag", methods=["POST"])
 def admin_flag():
-    data = get_data()
-    session = need_session(get_token(data))
-    if not session or not session.get("is_admin"):
+    data = request.get_json(silent=True) or request.form.to_dict()
+    token = request.cookies.get(session_cookie) or request.headers.get("Authorization") or data.get("token")
+    sess = sessions.get(token)
+    if not sess or not sess.get("is_admin"):
         return jsonify({"detail": "Admin only"}), 403
     return jsonify({"flag": flag_value})
 

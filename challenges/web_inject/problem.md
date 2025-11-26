@@ -8,8 +8,9 @@
 
 ## Description
 
-Some intern set up a dumb login and registration field. How can we take it over
-and log in ourselves?
+Someone rewrote the login to “encrypt” passwords with a fixed key/nonce, but
+they still jam your input straight into the SQL. Can you break in and steal the
+flag anyway?
 
 ## Details
 
@@ -23,9 +24,11 @@ For reference:
 
 ## Hints
 
-- Try crafting a username/password pair that closes the original `WHERE` clause
-  and appends your own SQL.
-- Once you control an admin session, hit `/admin/flag`.
+- Login still builds SQL with string formatting. UNION your own SELECT into the
+  temp table to pull other rows.
+- The same nonce/key is reused for every password. Grab your own ciphertext,
+  derive a keystream, and decrypt the admin password from the injected row.
+- Once you’ve got the admin password, log in normally and call `/admin/flag`.
 
 ## Tags
  - beginner
@@ -43,10 +46,12 @@ init: true
 
 ## Solution Overview
 
-Use the login form to inject `'); INSERT INTO users(username,password,is_admin)`
-payloads and create an account you know. Log in normally, keep the returned
-session cookie, then call `/admin/flag` with that cookie to retrieve the
-instance flag.
+Register a user with a known password, then log in to get its password
+ciphertext (returned in the JSON). Use `/login` with a UNION in the username to
+select the admin row alongside your own ciphertext, so the decrypt check passes
+but the admin ciphertext lands in the response. XOR your known plaintext with
+your ciphertext to get the keystream, XOR that with the admin ciphertext to
+recover the admin password. Log in as admin and POST to `/admin/flag`.
 
 
 ## Attributes

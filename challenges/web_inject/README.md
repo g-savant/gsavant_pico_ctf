@@ -1,9 +1,12 @@
 # Identity Checker
 
-Identity Checker is just a bad login portal: it copies your input straight
-into a string-building SQL query, so you can inject arbitrary statements. The
-flow now is:
+Identity Checker “encrypts” passwords with AES-GCM but reuses the same nonce and
+copies your input straight into SQL. Use SQLi to pull the admin’s encrypted
+password, use your own ciphertext to build the keystream, and decrypt the
+admin’s password. Flow:
 
-- Push an `INSERT INTO users(...) VALUES (...)` payload into the password field.
-- Log in as the account you just injected and keep the session cookie.
-- Call `/admin/flag` with that cookie to grab the flag.
+- Register any user with a known password.
+- Log in as that user to get your password ciphertext.
+- Send a UNION in the login username to pull the admin row; the response hands
+  back the admin ciphertext.
+- XOR to recover the admin password, log in as admin, and POST `/admin/flag`.

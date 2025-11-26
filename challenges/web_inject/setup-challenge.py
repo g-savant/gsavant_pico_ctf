@@ -6,6 +6,7 @@ import string
 FLAG_PATH = "/challenge/flag"
 ADMIN_PASS_PATH = "/challenge/admin_password"
 METADATA_PATH = "/challenge/metadata.json"
+NONCE_PATH = "/challenge/gcm_nonce"
 
 
 def random_password():
@@ -16,12 +17,15 @@ def random_password():
 def main():
     flag = os.environ.get("FLAG", "picoCTF{dev_flag}").strip()
     admin_password = random_password()
+    nonce = secrets.token_hex(6)  # 12 chars
 
     os.makedirs("/challenge", exist_ok=True)
     with open(FLAG_PATH, "w") as fh:
         fh.write(flag)
     with open(ADMIN_PASS_PATH, "w") as fh:
         fh.write(admin_password)
+    with open(NONCE_PATH, "w") as fh:
+        fh.write(nonce)
     with open(METADATA_PATH, "w") as fh:
         json.dump({"flag": flag}, fh)
 
